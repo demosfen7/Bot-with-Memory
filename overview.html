@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Бот с памятью — коротко</title>
+<style>
+  :root {
+    --bg: #f6f5f1;
+    --surface: #ffffff;
+    --text: #1d1d1b;
+    --muted: #666560;
+    --line: #e3e1da;
+    --code-bg: #f0eee8;
+
+    --short: #b45f06;
+    --short-bg: #fdf1dc;
+    --short-line: #efc98a;
+
+    --long: #2450c4;
+    --long-bg: #e8eefc;
+    --long-line: #b4c6f2;
+
+    --accent: #23795a;
+    --accent-bg: #e2f3ec;
+
+    --radius: 12px;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121211;
+      --surface: #1b1b19;
+      --text: #ecebe5;
+      --muted: #a09f97;
+      --line: #34332f;
+      --code-bg: #262624;
+
+      --short: #f2ab48;
+      --short-bg: #2c2314;
+      --short-line: #5b4520;
+
+      --long: #86a8ff;
+      --long-bg: #18213a;
+      --long-line: #2f4275;
+
+      --accent: #5fd0a0;
+      --accent-bg: #14281f;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 24px 16px 32px; }
+
+  header { margin-bottom: 18px; }
+  h1 { font-size: clamp(24px, 4vw, 32px); line-height: 1.15; margin: 0 0 6px; letter-spacing: -.02em; }
+  header p { margin: 0; color: var(--muted); max-width: 760px; }
+  h2 {
+    font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); margin: 22px 0 8px; font-weight: 600;
+  }
+  code, .mono { font-family: var(--mono); font-size: .86em; }
+  :not(pre) > code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+
+  /* ---------- потоки ---------- */
+  .lane {
+    display: flex; align-items: stretch; gap: 6px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 10px;
+  }
+  .lane + .lane { margin-top: 10px; }
+  .lane-label {
+    flex: 0 0 84px; display: flex; flex-direction: column; justify-content: center;
+    font-size: 13px; font-weight: 600; line-height: 1.3; padding-right: 6px;
+  }
+  .lane-label small { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .node {
+    flex: 1 1 0; min-width: 0;
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 9px;
+    padding: 8px 10px; font-size: 13.5px; line-height: 1.35;
+  }
+  .node b { display: block; font-size: 14px; margin-bottom: 2px; }
+  .node .n {
+    display: inline-block; width: 18px; height: 18px; line-height: 18px; text-align: center;
+    border-radius: 50%; background: var(--text); color: var(--bg);
+    font-size: 11px; font-weight: 700; margin-right: 5px; vertical-align: 1px;
+  }
+  .node span { color: var(--muted); }
+  .node.short { background: var(--short-bg); border-color: var(--short-line); }
+  .node.long  { background: var(--long-bg);  border-color: var(--long-line); }
+  .node.short .n { background: var(--short); }
+  .node.long  .n { background: var(--long); }
+  .arr { flex: 0 0 auto; align-self: center; color: var(--muted); font-size: 18px; }
+  .flow-note { margin: 6px 2px 0; font-size: 13px; color: var(--muted); }
+
+  /* ---------- память ---------- */
+  .mem { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .card {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 14px 16px; background: var(--surface);
+  }
+  .card.short { background: var(--short-bg); border-color: var(--short-line); }
+  .card.long  { background: var(--long-bg);  border-color: var(--long-line); }
+  .card h3 { margin: 0 0 2px; font-size: 17px; }
+  .card.short h3 { color: var(--short); }
+  .card.long h3  { color: var(--long); }
+  .card .tag { font-size: 13px; color: var(--muted); margin: 0 0 8px; }
+  .card ul { margin: 0; padding-left: 18px; }
+  .card li { margin: 3px 0; font-size: 14px; }
+  .where { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13.5px; margin: 0 0 8px; }
+  .where dt { font-family: var(--mono); font-size: 12.5px; }
+  .where dd { margin: 0; color: var(--muted); }
+  .life { margin: 8px 0 0; font-size: 13px; font-weight: 600; }
+  .card.short .life { color: var(--short); }
+  .card.long .life  { color: var(--long); }
+
+  /* ---------- библиотеки ---------- */
+  .libs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .lib {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 8px 12px; font-size: 13px; line-height: 1.35;
+  }
+  .lib b { display: block; font-family: var(--mono); font-size: 13.5px; }
+  .lib span { color: var(--muted); }
+
+  /* ---------- адаптив ---------- */
+  @media (max-width: 900px) {
+    .libs { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 760px) {
+    .lane { flex-direction: column; }
+    .lane-label { flex: none; padding: 0 0 4px; }
+    .arr { transform: rotate(90deg); }
+    .mem { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Telegram-бот с памятью</h1>
+    <p>Ведёт диалог и отвечает по вашим PDF, DOCX и TXT. Помнит <b>о чём говорили</b> (кратковременная память) и <b>что написано в документах</b> (долговременная память, RAG).</p>
+  </header>
+
+  <h2>Как бот работает</h2>
+
+  <div class="lane">
+    <div class="lane-label">Вопрос в чате<small>текстовое сообщение</small></div>
+    <div class="node short"><b><span class="n">1</span>История</b><span>вопрос пишется в кратковременную память</span></div>
+    <div class="arr">→</div>
+    <div class="node long"><b><span class="n">2</span>Поиск</b><span>вопрос → вектор → 5 ближайших фрагментов в ChromaDB</span></div>
+    <div class="arr">→</div>
+    <div class="node"><b><span class="n">3</span>Prompt</b><span>правила + резюме + 10 реплик + фрагменты + вопрос</span></div>
+    <div class="arr">→</div>
+    <div class="node"><b><span class="n">4</span>Модель</b><span>OpenAI <code>gpt-5-mini</code> формирует ответ</span></div>
+    <div class="arr">→</div>
+    <div class="node short"><b><span class="n">5</span>Ответ</b><span>уходит в чат с «Источниками» и попадает в историю</span></div>
+  </div>
+
+  <div class="lane">
+    <div class="lane-label">Файл в чате<small>PDF, DOCX, TXT до 20 МБ</small></div>
+    <div class="node"><b><span class="n">1</span>Текст</b><span>извлекается из файла (без OCR для сканов)</span></div>
+    <div class="arr">→</div>
+    <div class="node"><b><span class="n">2</span>Чанки</b><span>~500 символов с перекрытием 75</span></div>
+    <div class="arr">→</div>
+    <div class="node"><b><span class="n">3</span>Эмбеддинги</b><span>OpenAI <code>text-embedding-3-small</code></span></div>
+    <div class="arr">→</div>
+    <div class="node long"><b><span class="n">4</span>ChromaDB</b><span>векторы + метка <code>user_id</code></span></div>
+    <div class="arr">→</div>
+    <div class="node long"><b><span class="n">5</span>SQLite + диск</b><span>реестр документов, оригинал файла</span></div>
+  </div>
+  <p class="flow-note">Резюмирование идёт после ответа: история длиннее 20 реплик сжимается моделью в короткое резюме.</p>
+
+  <h2>Память и где она лежит</h2>
+
+  <div class="mem">
+    <div class="card short">
+      <h3>Кратковременная</h3>
+      <p class="tag">Что обсуждаем сейчас</p>
+      <dl class="where">
+        <dt>RAM</dt><dd><code>deque</code> на каждого <code>user_id</code></dd>
+        <dt>код</dt><dd><code>services/short_memory.py</code></dd>
+      </dl>
+      <ul>
+        <li>В модель идут последние <b>10 реплик</b> и резюме старой части</li>
+        <li>Больше 20 реплик → старое сжимается в резюме, остаются 6 последних</li>
+        <li>Понимает уточнения: «А сколько это занимает?»</li>
+      </ul>
+      <p class="life">Стирается при перезапуске или /clear_chat</p>
+    </div>
+
+    <div class="card long">
+      <h3>Долговременная</h3>
+      <p class="tag">Что бот знает из документов</p>
+      <dl class="where">
+        <dt>data/chroma/</dt><dd>векторы чанков, коллекция <code>long_memory</code></dd>
+        <dt>data/app.db</dt><dd>SQLite: список документов, выбранный документ</dd>
+        <dt>data/uploads/{user_id}/</dt><dd>оригиналы файлов</dd>
+      </dl>
+      <ul>
+        <li>Каждый поиск и удаление фильтруются по <b><code>user_id</code></b>: чужих документов не видно</li>
+        <li>Далёкие по смыслу фрагменты отсекаются, дубли удаляются</li>
+        <li>Ничего не нашлось → «Не нашёл подтверждения…», без выдумок</li>
+      </ul>
+      <p class="life">Переживает перезапуск</p>
+    </div>
+  </div>
+
+  <h2>Библиотеки</h2>
+
+  <div class="libs">
+    <div class="lib"><b>aiogram 3</b><span>Telegram-бот, async-обработчики и команды</span></div>
+    <div class="lib"><b>openai</b><span>чат-модель, эмбеддинги</span></div>
+    <div class="lib"><b>chromadb</b><span>векторная база, косинусный поиск</span></div>
+    <div class="lib"><b>sqlite3</b><span>реестр документов (встроена в Python)</span></div>
+    <div class="lib"><b>pypdf</b><span>текст из PDF</span></div>
+    <div class="lib"><b>python-docx</b><span>текст из DOCX</span></div>
+    <div class="lib"><b>python-dotenv</b><span>ключи и настройки из <code>.env</code></span></div>
+    <div class="lib"><b>pytest</b><span>тесты чанкера, загрузчика, памяти</span></div>
+  </div>
+
+</div>
+</body>
+</html>

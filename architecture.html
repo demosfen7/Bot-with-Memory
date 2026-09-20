@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Бот с памятью — архитектура</title>
+<style>
+  :root {
+    --bg: #f6f5f1;
+    --surface: #ffffff;
+    --surface-2: #faf9f6;
+    --text: #1d1d1b;
+    --muted: #666560;
+    --line: #e3e1da;
+    --code-bg: #f0eee8;
+
+    --short: #b45f06;
+    --short-bg: #fdf1dc;
+    --short-line: #efc98a;
+
+    --long: #2450c4;
+    --long-bg: #e8eefc;
+    --long-line: #b4c6f2;
+
+    --ok: #23795a;
+    --ok-bg: #e2f3ec;
+    --warn: #a3341f;
+    --warn-bg: #fbe9e4;
+
+    --radius: 12px;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121211;
+      --surface: #1b1b19;
+      --surface-2: #222220;
+      --text: #ecebe5;
+      --muted: #a09f97;
+      --line: #34332f;
+      --code-bg: #262624;
+
+      --short: #f2ab48;
+      --short-bg: #2c2314;
+      --short-line: #5b4520;
+
+      --long: #86a8ff;
+      --long-bg: #18213a;
+      --long-line: #2f4275;
+
+      --ok: #5fd0a0;
+      --ok-bg: #14281f;
+      --warn: #ff9b85;
+      --warn-bg: #2d1a16;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 64px; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 20px; }
+
+  /* ---------- навигация ---------- */
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+  nav .wrap { display: flex; gap: 4px; overflow-x: auto; padding-top: 8px; padding-bottom: 8px; scrollbar-width: none; }
+  nav .wrap::-webkit-scrollbar { display: none; }
+  nav a {
+    flex: none; padding: 6px 12px; border-radius: 999px;
+    color: var(--muted); text-decoration: none; font-size: 14px; white-space: nowrap;
+  }
+  nav a:hover { background: var(--surface); color: var(--text); }
+
+  /* ---------- типографика ---------- */
+  header.hero { padding: 56px 0 24px; }
+  .eyebrow { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+  h1 { font-size: clamp(32px, 6vw, 48px); line-height: 1.1; margin: 0 0 16px; letter-spacing: -.02em; }
+  h2 { font-size: 28px; line-height: 1.2; margin: 0 0 8px; letter-spacing: -.01em; }
+  h3 { font-size: 18px; margin: 28px 0 8px; }
+  p { margin: 0 0 12px; }
+  .lead { font-size: 19px; color: var(--muted); max-width: 720px; }
+  section { padding: 44px 0 8px; }
+  section > .wrap > .sub { color: var(--muted); max-width: 720px; margin-bottom: 24px; }
+  code, .mono { font-family: var(--mono); font-size: .88em; }
+  :not(pre) > code { background: var(--code-bg); padding: 1px 6px; border-radius: 5px; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; overflow-x: auto; font: 13.5px/1.55 var(--mono); margin: 12px 0;
+  }
+  ul, ol { padding-left: 22px; margin: 0 0 12px; }
+  li { margin: 4px 0; }
+  small, .small { font-size: 13.5px; color: var(--muted); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+  .chip {
+    padding: 4px 12px; border-radius: 999px; font-size: 14px;
+    background: var(--surface); border: 1px solid var(--line);
+  }
+
+  /* ---------- карточки ---------- */
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+  .grid { display: grid; gap: 16px; }
+  .g2 { grid-template-columns: repeat(2, 1fr); }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 760px) { .g2, .g3 { grid-template-columns: 1fr; } }
+
+  .tldr { border-left: 4px solid var(--long); }
+  .tldr ul { margin: 0; }
+
+  .tag {
+    display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: .03em;
+    padding: 2px 9px; border-radius: 999px; vertical-align: middle;
+  }
+  .tag.short { background: var(--short-bg); color: var(--short); border: 1px solid var(--short-line); }
+  .tag.long { background: var(--long-bg); color: var(--long); border: 1px solid var(--long-line); }
+  .tag.ok { background: var(--ok-bg); color: var(--ok); }
+  .tag.warn { background: var(--warn-bg); color: var(--warn); }
+
+  .card.short { border-top: 4px solid var(--short); }
+  .card.long { border-top: 4px solid var(--long); }
+  .card h3 { margin-top: 0; }
+
+  /* ---------- таблицы ---------- */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  td:first-child { white-space: nowrap; }
+
+  /* ---------- схема слоёв ---------- */
+  .layers { display: flex; flex-direction: column; align-items: stretch; gap: 0; }
+  .node {
+    background: var(--surface); border: 1.5px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; text-align: center; font-weight: 600;
+  }
+  .node small { display: block; font-weight: 400; margin-top: 2px; }
+  .node.short { background: var(--short-bg); border-color: var(--short-line); }
+  .node.long { background: var(--long-bg); border-color: var(--long-line); }
+  .node.ext { border-style: dashed; background: var(--surface-2); }
+  .row { display: grid; gap: 12px; }
+  .row.c1 { grid-template-columns: minmax(0, 420px); justify-content: center; }
+  .row.c2 { grid-template-columns: repeat(2, 1fr); }
+  .row.c5 { grid-template-columns: repeat(5, 1fr); }
+  .row.c4 { grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 760px) { .row.c5, .row.c4 { grid-template-columns: repeat(2, 1fr); } .row.c2 { grid-template-columns: 1fr; } }
+  .link { text-align: center; color: var(--muted); font-size: 13px; padding: 7px 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 16px; font-size: 14px; color: var(--muted); }
+  .legend i { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: -2px; margin-right: 6px; border: 1.5px solid; }
+  .legend .l-short { background: var(--short-bg); border-color: var(--short-line); }
+  .legend .l-long { background: var(--long-bg); border-color: var(--long-line); }
+  .legend .l-ext { background: var(--surface-2); border-color: var(--line); border-style: dashed; }
+
+  /* ---------- пошаговые списки ---------- */
+  ol.steps { list-style: none; padding: 0; margin: 0; counter-reset: s; }
+  ol.steps > li {
+    counter-increment: s; position: relative; margin: 0;
+    padding: 0 0 22px 52px; border-left: 0;
+  }
+  ol.steps > li::before {
+    content: counter(s); position: absolute; left: 0; top: 0;
+    width: 34px; height: 34px; border-radius: 50%;
+    background: var(--long); color: var(--bg);
+    display: grid; place-items: center; font-weight: 700; font-size: 15px;
+  }
+  ol.steps > li::after {
+    content: ""; position: absolute; left: 16px; top: 38px; bottom: 4px; width: 2px; background: var(--line);
+  }
+  ol.steps > li:last-child::after { display: none; }
+  ol.steps h4 { margin: 4px 0 4px; font-size: 17px; }
+  ol.steps p { margin: 0 0 6px; }
+  .where { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+
+  /* ---------- симулятор ---------- */
+  .sim { padding: 20px; }
+  .sim-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  button {
+    font: inherit; font-size: 14.5px; cursor: pointer;
+    padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--surface-2); color: var(--text);
+  }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--long); color: var(--bg); border-color: var(--long); font-weight: 600; }
+  button:focus-visible { outline: 3px solid var(--long-line); outline-offset: 2px; }
+  .cells { display: grid; grid-template-columns: repeat(11, 1fr); gap: 6px; margin: 10px 0; }
+  @media (max-width: 560px) { .cells { grid-template-columns: repeat(6, 1fr); } }
+  .cell {
+    aspect-ratio: 1; border-radius: 8px; display: grid; place-items: center;
+    font: 600 13px var(--mono); border: 1.5px dashed var(--line); color: var(--muted);
+  }
+  .cell.out { border-style: solid; background: var(--surface-2); color: var(--muted); }
+  .cell.in { border-style: solid; background: var(--short-bg); border-color: var(--short); color: var(--short); }
+  .cell small { display: none; }
+  .summary-box {
+    margin-top: 12px; padding: 12px 14px; border-radius: 10px;
+    border: 1.5px dashed var(--line); font-size: 15px; color: var(--muted);
+  }
+  .summary-box.has { border-style: solid; border-color: var(--long); background: var(--long-bg); color: var(--text); }
+  .stat-row { display: flex; flex-wrap: wrap; gap: 20px; margin: 4px 0 8px; font-size: 14.5px; }
+  .stat-row b { font-family: var(--mono); }
+  .log { min-height: 48px; margin-top: 14px; padding: 10px 14px; border-radius: 10px; background: var(--code-bg); font-size: 14.5px; }
+  .sim-legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13.5px; color: var(--muted); }
+  .sim-legend i { display: inline-block; width: 13px; height: 13px; border-radius: 4px; margin-right: 6px; vertical-align: -2px; border: 1.5px solid; }
+
+  /* ---------- чанки ---------- */
+  .chunkviz { position: relative; height: 128px; margin: 16px 0 8px; }
+  .bar {
+    position: absolute; height: 30px; border-radius: 7px;
+    background: var(--long-bg); border: 1.5px solid var(--long);
+    font: 600 12.5px var(--mono); color: var(--long); display: flex; align-items: center; padding-left: 10px;
+  }
+  .ov { position: absolute; top: 0; bottom: 0; background: var(--short); opacity: .22; border-radius: 4px; }
+  .ovlabel { position: absolute; font-size: 12.5px; color: var(--short); font-weight: 600; white-space: nowrap; }
+
+  /* ---------- воронка ---------- */
+  .funnel { display: flex; flex-direction: column; gap: 8px; }
+  .fstep { display: flex; align-items: center; gap: 12px; }
+  .fbar {
+    height: 40px; border-radius: 8px; background: var(--long-bg); border: 1.5px solid var(--long);
+    display: flex; align-items: center; padding: 0 12px; font-weight: 600; color: var(--long); white-space: nowrap; overflow: hidden; font-size: 14.5px;
+  }
+  .flabel { font-size: 14px; color: var(--muted); flex: 1; min-width: 0; }
+  @media (max-width: 640px) { .fstep { flex-direction: column; align-items: stretch; gap: 4px; } .fbar { width: 100% !important; } }
+
+  /* ---------- анатомия prompt ---------- */
+  .msgs { display: flex; flex-direction: column; gap: 8px; }
+  .msg { border: 1.5px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--surface); }
+  .msg .role { font: 700 12px var(--mono); letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+  .msg.sys { background: var(--surface-2); }
+  .msg.hist { background: var(--short-bg); border-color: var(--short-line); }
+  .msg.hist .role { color: var(--short); }
+  .msg.cur { background: var(--long-bg); border-color: var(--long-line); }
+  .msg.cur .role { color: var(--long); }
+  .msg ul { margin: 6px 0 0; }
+
+  .cases { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  @media (max-width: 760px) { .cases { grid-template-columns: 1fr; } }
+  .case { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+  .case h4 { margin: 0 0 6px; font-size: 15.5px; }
+  .case p { font-size: 14.5px; color: var(--muted); margin: 0; }
+
+  /* ---------- примечания ---------- */
+  .note { display: flex; gap: 14px; padding: 14px 16px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); margin-bottom: 12px; }
+  .note .tag { flex: none; align-self: flex-start; margin-top: 3px; }
+  .note p { margin: 0; }
+  .note b { display: block; margin-bottom: 2px; }
+
+  footer { margin-top: 64px; padding: 24px 0 56px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+
+<nav aria-label="Разделы">
+  <div class="wrap">
+    <a href="#overview">Обзор</a>
+    <a href="#modules">Модули</a>
+    <a href="#memory">Две памяти</a>
+    <a href="#short">Кратковременная</a>
+    <a href="#long">Долговременная</a>
+    <a href="#flow">Логика запроса</a>
+    <a href="#stack">Библиотеки</a>
+    <a href="#safety">Надёжность</a>
+    <a href="#config">Настройки</a>
+    <a href="#notes">Нюансы</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Разбор архитектуры</p>
+    <h1>Бот с памятью</h1>
+    <p class="lead">Telegram-бот, который ведёт связный диалог и отвечает по вашим документам. Ниже — из чего он состоит, как хранит память, какие библиотеки использует и что происходит с каждым сообщением.</p>
+    <div class="chips">
+      <span class="chip">Python 3.11+</span>
+      <span class="chip">aiogram 3</span>
+      <span class="chip">OpenAI API</span>
+      <span class="chip">ChromaDB</span>
+      <span class="chip">SQLite</span>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<!-- ============ ОБЗОР ============ -->
+<section id="overview">
+  <div class="wrap">
+    <h2>Общая картина</h2>
+    <p class="sub">Бот — один асинхронный Python-процесс. Он получает сообщения из Telegram, а «думает» и «помнит» с помощью трёх вещей: модели OpenAI, векторной базы и обычной SQLite.</p>
+
+    <div class="card tldr" style="margin-bottom:24px">
+      <b>Коротко</b>
+      <ul>
+        <li>Сообщения приходят через <b>long polling</b> (<code>dispatcher.start_polling</code>), бот работает только в личных чатах.</li>
+        <li><span class="tag short">Кратковременная память</span> — история диалога в оперативной памяти процесса. При перезапуске исчезает.</li>
+        <li><span class="tag long">Долговременная память</span> — документы, нарезанные на фрагменты и превращённые в векторы. Лежат на диске, пока вы их не удалите.</li>
+        <li>На каждый вопрос бот ищет похожие фрагменты, собирает prompt из инструкции, резюме, истории и найденного текста, спрашивает модель и добавляет к ответу источники.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <div class="layers">
+        <div class="row c1"><div class="node">Пользователь<small>Telegram, личный чат</small></div></div>
+        <div class="link">↓ обновления (long polling, aiogram)</div>
+        <div class="row c1"><div class="node">bot.py — обработчики<small>команды · приём файлов · текст · кнопки · ошибки · замки на пользователя</small></div></div>
+        <div class="link">↓ через <code>App</code> (внедряется в обработчики как <code>workflow_data</code>)</div>
+        <div class="row c2">
+          <div class="node">ChatService<small>rag.py · диалог: память → поиск → prompt → модель</small></div>
+          <div class="node">DocumentService<small>documents.py · файл → текст → чанки → векторы → индекс</small></div>
+        </div>
+        <div class="link">↓ используют</div>
+        <div class="row c5">
+          <div class="node short">ShortMemory<small>история и резюме</small></div>
+          <div class="node long">RagService<small>поиск фрагментов</small></div>
+          <div class="node">EmbeddingService<small>тексты → векторы</small></div>
+          <div class="node long">VectorStore<small>обёртка над ChromaDB</small></div>
+          <div class="node long">DocumentRegistry<small>реестр в SQLite</small></div>
+        </div>
+        <div class="link">↓ хранят данные</div>
+        <div class="row c4">
+          <div class="node short">Оперативная память<small>dict + deque, только пока процесс жив</small></div>
+          <div class="node long">data/chroma/<small>тексты чанков, векторы, метаданные</small></div>
+          <div class="node long">data/app.db<small>документы, активный документ</small></div>
+          <div class="node long">data/uploads/<small>оригиналы файлов</small></div>
+        </div>
+        <div class="link">и снаружи</div>
+        <div class="row c1"><div class="node ext">OpenAI API<small>chat.completions (ответы, резюме) · embeddings (векторы)</small></div></div>
+      </div>
+      <div class="legend">
+        <span><i class="l-short"></i>кратковременная память</span>
+        <span><i class="l-long"></i>долговременная память</span>
+        <span><i class="l-ext"></i>внешний сервис</span>
+      </div>
+    </div>
+
+    <h3>Что происходит при запуске</h3>
+    <p class="small" style="margin-top:-4px">Функция <code>main()</code> в <code>bot.py</code> собирает всё вручную, без DI-фреймворка.</p>
+    <ol>
+      <li><code>load_settings()</code> читает <code>.env</code> и проверяет значения (ошибка — понятное сообщение и выход).</li>
+      <li>Открываются <code>VectorStore</code> (ChromaDB) и <code>DocumentRegistry</code> (SQLite).</li>
+      <li>Создаётся <code>AsyncOpenAI</code> с таймаутом 60 с и 2 повторами, поверх него — <code>EmbeddingService</code>.</li>
+      <li><code>DocumentService.cleanup_unfinished()</code> удаляет документы, индексация которых оборвалась при прошлом падении.</li>
+      <li>Собираются <code>ShortMemory</code> → <code>RagService</code> → <code>ChatService</code>; всё кладётся в объект <code>App</code>.</li>
+      <li>Бот проверяется через <code>get_me()</code>, регистрируются команды меню, запускается polling.</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ============ МОДУЛИ ============ -->
+<section id="modules">
+  <div class="wrap">
+    <h2>Из чего состоит проект</h2>
+    <p class="sub">Один файл — одна ответственность. Обработчики Telegram ничего не знают про векторы, а сервисы ничего не знают про Telegram.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Файл</th><th>Что делает</th></tr></thead>
+        <tbody>
+          <tr><td><code>bot.py</code></td><td>Точка входа. Роутер aiogram: команды, приём документов, текстовые сообщения, кнопки подтверждения удаления, перевод исключений в понятные сообщения, логирование с маскировкой секретов.</td></tr>
+          <tr><td><code>config.py</code></td><td>Читает <code>.env</code> в неизменяемый <code>Settings</code> и проверяет значения (например, overlap меньше размера чанка). Пути считаются от папки проекта.</td></tr>
+          <tr><td><code>services/short_memory.py</code></td><td><code>ShortMemory</code>: история в <code>deque</code> и резюме отдельно для каждого <code>user_id</code>.</td></tr>
+          <tr><td><code>services/rag.py</code></td><td>Сердце бота. <code>RagService</code> ищет фрагменты, <code>ChatService</code> собирает prompt, зовёт модель, добавляет источники и управляет резюмированием. Здесь же все системные промпты.</td></tr>
+          <tr><td><code>services/vector_store.py</code></td><td>Обёртка над ChromaDB: коллекция <code>long_memory</code>, косинусное расстояние, обязательный фильтр по <code>user_id</code>.</td></tr>
+          <tr><td><code>services/registry.py</code></td><td>SQLite: таблицы <code>documents</code> и <code>user_settings</code> (активный документ).</td></tr>
+          <tr><td><code>services/documents.py</code></td><td>Жизненный цикл документа: сохранить → индексировать → откатить при ошибке → удалить.</td></tr>
+          <tr><td><code>services/document_loader.py</code></td><td>Безопасное имя файла и извлечение текста из TXT, PDF, DOCX.</td></tr>
+          <tr><td><code>services/chunker.py</code></td><td><code>chunk_text()</code>: нарезка текста на чанки с перекрытием.</td></tr>
+          <tr><td><code>services/embeddings.py</code></td><td>Запросы к OpenAI Embeddings партиями по 100 текстов.</td></tr>
+          <tr><td><code>tests/</code></td><td>pytest: чанкер, загрузчик документов, кратковременная память.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ДВЕ ПАМЯТИ ============ -->
+<section id="memory">
+  <div class="wrap">
+    <h2>Две памяти: где что хранится</h2>
+    <p class="sub">Идея как у человека: рабочая память держит нить разговора, а долговременная — знания, которые бот «выучил» из ваших файлов.</p>
+
+    <div class="grid g2">
+      <div class="card short">
+        <h3><span class="tag short">Кратковременная</span></h3>
+        <p><b>О чём:</b> текущий разговор — что вы спросили и что бот ответил.</p>
+        <p><b>Зачем:</b> чтобы «А сколько это занимает?» было понятно без повторения темы.</p>
+        <p><b>Где:</b> в оперативной памяти процесса (<code>dict</code> → <code>deque</code>).</p>
+        <p><b>Живёт:</b> до перезапуска бота или <code>/clear_chat</code>.</p>
+      </div>
+      <div class="card long">
+        <h3><span class="tag long">Долговременная</span></h3>
+        <p><b>О чём:</b> содержимое ваших PDF, DOCX и TXT.</p>
+        <p><b>Зачем:</b> чтобы отвечать по документам и показывать источники.</p>
+        <p><b>Где:</b> три хранилища на диске: ChromaDB, SQLite, папка с файлами.</p>
+        <p><b>Живёт:</b> пока вы не выполните <code>/delete_document</code>. Перезапуск не страшен.</p>
+      </div>
+    </div>
+
+    <h3>Как именно сохраняется каждая порция данных</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Данные</th><th>Где лежат</th><th>Как</th><th>После перезапуска</th></tr></thead>
+        <tbody>
+          <tr><td>Реплики диалога</td><td>RAM</td><td><code>dict[user_id] → deque[Message]</code></td><td><span class="tag warn">пропадут</span></td></tr>
+          <tr><td>Резюме старой части диалога</td><td>RAM</td><td><code>dict[user_id] → str</code></td><td><span class="tag warn">пропадёт</span></td></tr>
+          <tr><td>Текст чанков, векторы, метаданные</td><td><code>data/chroma/</code></td><td><code>chromadb.PersistentClient</code>, коллекция <code>long_memory</code></td><td><span class="tag ok">сохранятся</span></td></tr>
+          <tr><td>Реестр документов (имя, дата, число чанков, статус)</td><td><code>data/app.db</code></td><td>SQLite, таблица <code>documents</code></td><td><span class="tag ok">сохранится</span></td></tr>
+          <tr><td>Выбранный документ (<code>/use_document</code>)</td><td><code>data/app.db</code></td><td>SQLite, таблица <code>user_settings</code></td><td><span class="tag ok">сохранится</span></td></tr>
+          <tr><td>Оригинальные файлы</td><td><code>data/uploads/{user_id}/</code></td><td><code>{doc_id}_{безопасное_имя}</code></td><td><span class="tag ok">сохранятся</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ КРАТКОВРЕМЕННАЯ ============ -->
+<section id="short">
+  <div class="wrap">
+    <h2><span class="tag short">Кратковременная</span> память подробно</h2>
+    <p class="sub">Класс <code>ShortMemory</code> оперирует тремя числами. Их легко перепутать, поэтому ниже — живой симулятор с реальными значениями из кода.</p>
+
+    <div class="grid g3" style="margin-bottom:24px">
+      <div class="card"><b class="mono">10</b> — окно<p class="small" style="margin:6px 0 0"><code>SHORT_MEMORY_MESSAGES</code>. Сколько последних реплик уходит в модель (считая текущий вопрос).</p></div>
+      <div class="card"><b class="mono">&gt; 20</b> — порог<p class="small" style="margin:6px 0 0"><code>SHORT_MEMORY_SUMMARY_AFTER</code>. Когда реплик больше, старые сворачиваются в резюме.</p></div>
+      <div class="card"><b class="mono">6</b> — остаётся<p class="small" style="margin:6px 0 0"><code>SUMMARY_KEEP_MESSAGES</code> (константа в <code>config.py</code>). Сколько свежих реплик не трогаем при резюмировании.</p></div>
+    </div>
+
+    <p>Ёмкость <code>deque</code> = <code>max(окно, порог + 2)</code> = <b>22</b>. Иначе счётчик никогда бы не дошёл до порога 20 при окне 10. Если очередь всё же переполнится (например, резюмирование не удалось), самая старая реплика вытесняется (FIFO).</p>
+
+    <div class="card sim" id="sim">
+      <b>Симулятор: жизнь одного диалога</b>
+      <p class="small" style="margin:4px 0 14px">Каждое нажатие — один обмен: вопрос пользователя и ответ бота (2 реплики). Резюмирование срабатывает уже после отправки ответа.</p>
+      <div class="sim-controls">
+        <button class="primary" id="sim-send">Задать вопрос</button>
+        <button id="sim-send5">+5 вопросов</button>
+        <button id="sim-clear">/clear_chat</button>
+      </div>
+      <div class="stat-row">
+        <span>Реплик в <code>deque</code>: <b id="st-len">0</b> из 22</span>
+        <span>Порог резюмирования: &gt;&nbsp;<b>20</b></span>
+        <span>Обменов всего: <b id="st-ex">0</b></span>
+      </div>
+      <div class="cells" id="cells" aria-label="Содержимое deque"></div>
+      <div class="sim-legend">
+        <span><i style="background:var(--short-bg);border-color:var(--short)"></i>уйдёт в модель со следующим вопросом</span>
+        <span><i style="background:var(--surface-2);border-color:var(--line)"></i>лежит в памяти, но модель не увидит</span>
+        <span><i style="border-style:dashed;border-color:var(--line)"></i>свободный слот</span>
+      </div>
+      <div class="summary-box" id="sum">Резюме пока нет.</div>
+      <div class="log" id="log">Нажмите «Задать вопрос».</div>
+    </div>
+
+    <h3>Резюмирование</h3>
+    <ol>
+      <li>Когда после ответа в очереди больше 20 реплик, все, кроме последних 6, отправляются модели с просьбой сжать их в резюме: факты о пользователе, цели, решения, нерешённые вопросы. Без паролей, ключей и чужих секретов, не длиннее 1500 символов (жёсткая обрезка ещё и на 3000).</li>
+      <li>Если резюме уже было, модель получает «предыдущее резюме + новые реплики» и объединяет их в одно.</li>
+      <li>Свёрнутые реплики удаляются из очереди, резюме сохраняется и с этого момента попадает в системный prompt отдельным блоком.</li>
+      <li>Если запрос на резюме упал, ошибка только логируется: очередь остаётся как есть, попытка повторится после следующего ответа.</li>
+    </ol>
+    <p class="small">Один нюанс: пока резюме ещё не создано, реплики старше окна модель не видит. Подробнее — в разделе «Нюансы».</p>
+  </div>
+</section>
+
+<!-- ============ ДОЛГОВРЕМЕННАЯ ============ -->
+<section id="long">
+  <div class="wrap">
+    <h2><span class="tag long">Долговременная</span> память подробно</h2>
+    <p class="sub">Это классический RAG (retrieval-augmented generation): документ один раз превращается в набор векторов, а на каждый вопрос из него достаются только подходящие куски.</p>
+
+    <h3 style="margin-top:8px">Как документ попадает в память</h3>
+    <ol class="steps">
+      <li>
+        <h4>Проверка и сохранение</h4>
+        <p>Обработчик проверяет расширение (<code>.pdf .docx .txt</code>), что файл не пустой и не больше лимита (20 МБ по умолчанию). Имя очищается от путей и спецсимволов, файл скачивается в <code>data/uploads/{user_id}/{uuid}_{имя}</code>. В SQLite создаётся запись со статусом <code>processing</code>.</p>
+        <span class="where">bot.py · on_document → documents.py · new_upload</span>
+      </li>
+      <li>
+        <h4>Извлечение текста</h4>
+        <p>TXT читается в кодировках utf-8-sig → utf-16 → cp1251. PDF — через <code>pypdf</code> (страница, которую не удалось прочитать, пропускается, а не роняет весь файл). DOCX — через <code>python-docx</code>, абзацы и таблицы в исходном порядке. PDF-скан без текстового слоя отклоняется: OCR нет.</p>
+        <span class="where">document_loader.py · extract_text</span>
+      </li>
+      <li>
+        <h4>Нарезка на чанки</h4>
+        <p>Текст нормализуется и режется на куски до 500 символов с перекрытием 75. Границу ищем по приоритету: конец абзаца → конец предложения → перевод строки → пробел → жёсткий разрез. Следующий чанк стартует с начала слова, а не с середины.</p>
+        <span class="where">chunker.py · chunk_text</span>
+      </li>
+      <li>
+        <h4>Эмбеддинги</h4>
+        <p>Каждый чанк превращается в вектор моделью <code>text-embedding-3-small</code>. Тексты уходят в OpenAI партиями по 100, порядок сохраняется.</p>
+        <span class="where">embeddings.py · embed_texts</span>
+      </li>
+      <li>
+        <h4>Запись в ChromaDB и реестр</h4>
+        <p>Чанки записываются вместе с текстом, вектором и метаданными. Затем запись в SQLite переводится в статус <code>ready</code> с числом чанков. Только после этого документ виден в <code>/documents</code>.</p>
+        <span class="where">vector_store.py · add_chunks → registry.py · mark_ready</span>
+      </li>
+      <li>
+        <h4>Откат при любой ошибке</h4>
+        <p>Если что-то упало на любом шаге, удаляются чанки, запись реестра и файл. Если упал весь процесс, недоделанные документы (статус не <code>ready</code>) подчищаются при следующем запуске.</p>
+        <span class="where">documents.py · _rollback, cleanup_unfinished</span>
+      </li>
+    </ol>
+
+    <h3>Как выглядит нарезка</h3>
+    <div class="card">
+      <div class="chunkviz" aria-hidden="true">
+        <div class="ov" style="left:34%;width:6%"></div>
+        <div class="ov" style="left:68%;width:6%"></div>
+        <div class="bar" style="top:0;left:0;width:40%">чанк 1</div>
+        <div class="bar" style="top:44px;left:34%;width:40%">чанк 2</div>
+        <div class="bar" style="top:88px;left:68%;width:32%">чанк 3</div>
+        <span class="ovlabel" style="left:40.5%;top:6px">← перекрытие 75 симв.</span>
+        <span class="ovlabel" style="left:74.5%;top:50px">← перекрытие 75 симв.</span>
+      </div>
+      <p class="small" style="margin:0">Перекрытие нужно, чтобы мысль, оказавшаяся на стыке двух чанков, не потерялась: она целиком есть хотя бы в одном из них. Числа условные, пропорции соблюдены (75 из 500 — это 15%).</p>
+    </div>
+
+    <h3>Что записывается в ChromaDB на каждый чанк</h3>
+<pre><code>id        = "{doc_id}:{chunk_index}"
+document  = текст чанка
+embedding = вектор от OpenAI
+metadata  = {
+  "user_id": 379394110,          # чей это чанк — основа изоляции
+  "doc_id": "dd4d37ab-…",
+  "original_filename": "company.pdf",
+  "chunk_index": 1,              # человеку показывается как «фрагмент 2»
+  "start_char": 412, "end_char": 890,
+  "uploaded_at": "2026-…", "source_type": "document"
+}</code></pre>
+    <p>Коллекция создаётся с <code>{"hnsw:space": "cosine"}</code>: близость считается по косинусному расстоянию (0 — одинаково, чем больше, тем дальше). Встроенная функция эмбеддингов Chroma отключена, потому что векторы считает сам бот через OpenAI.</p>
+
+    <h3>Изоляция пользователей</h3>
+    <p>Все пользователи делят одну коллекцию, но каждый запрос к ней — поиск, подсчёт, удаление — собирается через одну функцию, где условие по <code>user_id</code> присутствует всегда:</p>
+<pre><code>def _where(user_id, doc_id=None):
+    if doc_id is None:
+        return {"user_id": int(user_id)}
+    return {"$and": [{"user_id": int(user_id)}, {"doc_id": doc_id}]}</code></pre>
+    <p>То же в реестре: <code>WHERE id = ? AND user_id = ?</code>. Даже подставив чужой <code>doc_id</code>, документ не найти и не удалить. Файлы у каждого лежат в своей папке, а перед удалением проверяется, что путь остаётся внутри неё.</p>
+  </div>
+</section>
+
+<!-- ============ ЛОГИКА ЗАПРОСА ============ -->
+<section id="flow">
+  <div class="wrap">
+    <h2>Что происходит, когда вы пишете боту</h2>
+    <p class="sub">Путь текстового сообщения от Telegram до ответа. Всё это делает <code>ChatService.answer()</code> под замком пользователя.</p>
+
+    <ol class="steps">
+      <li>
+        <h4>Замок и индикатор «печатает…»</h4>
+        <p>Сообщения одного пользователя обрабатываются строго по очереди (<code>asyncio.Lock</code> на <code>user_id</code>), чтобы история не перемешалась. Пока идёт работа, в чате горит «печатает…».</p>
+        <span class="where">bot.py · on_text, UserLocks</span>
+      </li>
+      <li>
+        <h4>Вопрос попадает в кратковременную память</h4>
+        <p>Реплика пользователя сразу добавляется в <code>deque</code>. Для prompt из истории берётся окно из 10 реплик и <em>убирается</em> текущий вопрос (он пойдёт отдельно), то есть модель видит до 9 предыдущих реплик.</p>
+        <span class="where">rag.py · answer()</span>
+      </li>
+      <li>
+        <h4>Есть ли документы и какой выбран</h4>
+        <p>Реестр отвечает: есть ли у пользователя готовые документы и задан ли активный (<code>/use_document</code>). Нет документов — поиск вообще пропускается, запрос к OpenAI за эмбеддингом не тратится.</p>
+        <span class="where">rag.py · _find_context</span>
+      </li>
+      <li>
+        <h4>Формулировка поискового запроса</h4>
+        <p>Если вопрос короче 60 символов («А сколько это занимает?»), к нему спереди приписывается предыдущий вопрос пользователя. Иначе поиск по слову «это» ничего бы не нашёл.</p>
+        <span class="where">rag.py · _build_search_query</span>
+      </li>
+      <li>
+        <h4>Векторный поиск</h4>
+        <p>Запрос превращается в вектор и сравнивается с чанками пользователя в ChromaDB. Дальше — воронка из четырёх шагов (схема ниже).</p>
+        <span class="where">rag.py · RagService.retrieve_context</span>
+      </li>
+      <li>
+        <h4>Сборка prompt</h4>
+        <p>Собирается список сообщений для модели (схема ниже). Фрагменты документов приходят внутри последнего сообщения пользователя, помеченные как «только данные».</p>
+        <span class="where">rag.py · _build_messages</span>
+      </li>
+      <li>
+        <h4>Вызов модели</h4>
+        <p><code>chat.completions.create</code> с <code>max_completion_tokens</code> (4000 по умолчанию; у reasoning-моделей в лимит входят и «размышления»). Пустой ответ — понятная ошибка; обрезанный — дополняется пометкой о сокращении.</p>
+        <span class="where">rag.py · _complete</span>
+      </li>
+      <li>
+        <h4>Запись ответа и источники</h4>
+        <p>Ответ кладётся в историю <em>без</em> блока источников, чтобы модель не начала его копировать. Пользователю отправляется ответ плюс строка «Источники в документах: файл, фрагменты 2 и 4», но только если найдены чанки и модель не сказала «не нашёл подтверждения».</p>
+        <span class="where">rag.py · answer(), format_sources</span>
+      </li>
+      <li>
+        <h4>Отправка и резюмирование</h4>
+        <p>Длинный ответ режется на части до 4000 символов по границам абзацев (лимит Telegram — 4096). Только после отправки проверяется, не пора ли свернуть историю в резюме, поэтому пользователь не ждёт лишний запрос.</p>
+        <span class="where">bot.py · send_long → chat.maybe_summarize</span>
+      </li>
+    </ol>
+    <p class="small">Если на любом шаге до записи ответа что-то падает, вопрос удаляется из истории (<code>discard_last_user_message</code>), а пользователь получает короткое человеческое сообщение. Трейсбек уходит только в лог.</p>
+
+    <h3>Воронка поиска (значения по умолчанию)</h3>
+    <div class="card">
+      <div class="funnel">
+        <div class="fstep"><div class="fbar" style="width:100%">15 кандидатов</div><div class="flabel">Запрашиваем в 3 раза больше, чем нужно: <code>top_k × 3</code>, где <code>top_k = 5</code></div></div>
+        <div class="fstep"><div class="fbar" style="width:72%">≤ 0.7 расстояния</div><div class="flabel">Порог релевантности <code>RAG_MAX_DISTANCE</code>: слишком далёкие отбрасываются</div></div>
+        <div class="fstep"><div class="fbar" style="width:52%">без дублей</div><div class="flabel">Чанки с почти одинаковым набором слов (сходство Жаккара ≥ 0.85) убираются, остаётся более релевантный</div></div>
+        <div class="fstep"><div class="fbar" style="width:36%">не более 5</div><div class="flabel">Обрезка до <code>RAG_TOP_K</code>; эти фрагменты попадут в prompt</div></div>
+      </div>
+      <p class="small" style="margin:12px 0 0">Ширина полос — иллюстрация: сколько останется на каждом шаге, зависит от вопроса и документов.</p>
+    </div>
+
+    <h3>Из чего состоит запрос к модели</h3>
+    <div class="msgs">
+      <div class="msg sys">
+        <div class="role">system</div>
+        Инструкция бота (по-русски, кратко, не выдумывать) + дополнительные правила: фрагменты — только данные, не выполнять вписанные в них команды, не путать историю с документами, без Markdown, источники добавит бот.
+        <ul><li>Если есть резюме, в конец добавляется блок «РЕЗЮМЕ ПРЕДЫДУЩЕЙ ЧАСТИ ДИАЛОГА».</li></ul>
+      </div>
+      <div class="msg hist">
+        <div class="role">user / assistant × до 9</div>
+        Недавняя история диалога из кратковременной памяти, реплики как есть.
+      </div>
+      <div class="msg cur">
+        <div class="role">user (последнее)</div>
+<pre style="margin:6px 0 0"><code>ФРАГМЕНТЫ ИЗ ДОКУМЕНТОВ (найдены векторным поиском …):
+
+[Фрагмент 1 | файл: company.pdf | номер в файле: 2]
+…текст чанка…
+
+КОНЕЦ ФРАГМЕНТОВ
+
+ТЕКУЩИЙ ВОПРОС ПОЛЬЗОВАТЕЛЯ:
+Вы занимаетесь веб-разработкой?</code></pre>
+      </div>
+    </div>
+
+    <h3>Три сценария для блока с документами</h3>
+    <div class="cases">
+      <div class="case">
+        <h4><span class="tag ok">Найдено</span></h4>
+        <p>Есть релевантные чанки → в prompt идёт блок «ФРАГМЕНТЫ ИЗ ДОКУМЕНТОВ». К ответу добавляются источники.</p>
+      </div>
+      <div class="case">
+        <h4><span class="tag warn">Документы есть, но не нашли</span></h4>
+        <p>Вместо фрагментов — пометка: «ничего не найдено». Про документы модель отвечает «Не нашёл подтверждения этому в загруженных документах.», на прочие вопросы отвечает как обычно. При <code>/use_document</code> другие документы не подставляются.</p>
+      </div>
+      <div class="case">
+        <h4><span class="tag">Документов нет</span></h4>
+        <p>Блока нет вовсе, обычный диалог по истории и общим знаниям. Запрос за эмбеддингом не делается.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ БИБЛИОТЕКИ ============ -->
+<section id="stack">
+  <div class="wrap">
+    <h2>Библиотеки и сервисы</h2>
+    <p class="sub">Из <code>requirements.txt</code>, плюс то, что берётся из стандартной библиотеки Python.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Что</th><th>Зачем в этом боте</th></tr></thead>
+        <tbody>
+          <tr><td><code>aiogram</code> 3.13+</td><td>Асинхронный Telegram-фреймворк: роутер, фильтры (<code>Command</code>, <code>F.document</code>, <code>F.text</code>), inline-кнопки, статус «печатает», long polling.</td></tr>
+          <tr><td><code>openai</code> 1.60+</td><td>Клиент <code>AsyncOpenAI</code>: <code>chat.completions</code> для ответов и резюме, <code>embeddings</code> для векторов. Исключения SDK переводятся в понятные пользователю сообщения.</td></tr>
+          <tr><td><code>chromadb</code> 0.5.5+</td><td>Локальная векторная база (<code>PersistentClient</code>, индекс HNSW, косинусное расстояние). Хранит и векторы, и исходный текст чанков, и метаданные.</td></tr>
+          <tr><td><code>pypdf</code></td><td>Извлечение текста из PDF (подключается лениво: только когда пришёл PDF).</td></tr>
+          <tr><td><code>python-docx</code></td><td>Извлечение текста из DOCX, включая таблицы.</td></tr>
+          <tr><td><code>python-dotenv</code></td><td>Загрузка <code>BOT_TOKEN</code>, <code>OPENAI_API_KEY</code> и настроек из <code>.env</code>.</td></tr>
+          <tr><td><code>pytest</code></td><td>Тесты чанкера, загрузчика документов и кратковременной памяти.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Из стандартной библиотеки</h3>
+    <div class="grid g3">
+      <div class="card"><b>sqlite3</b><p class="small" style="margin:4px 0 0">Реестр документов и настройки. Новое соединение на операцию — просто и безопасно для потоков.</p></div>
+      <div class="card"><b>asyncio</b><p class="small" style="margin:4px 0 0">Замки на пользователя и <code>to_thread</code> для блокирующих операций (Chroma, чтение PDF).</p></div>
+      <div class="card"><b>collections.deque</b><p class="small" style="margin:4px 0 0">Очередь реплик с ограниченной ёмкостью и вытеснением старых.</p></div>
+      <div class="card"><b>dataclasses</b><p class="small" style="margin:4px 0 0"><code>Settings</code>, <code>Message</code>, <code>Chunk</code>, <code>DocumentRecord</code> — неизменяемые (frozen) структуры.</p></div>
+      <div class="card"><b>re, unicodedata</b><p class="small" style="margin:4px 0 0">Нормализация текста, поиск границ предложений, очистка имён файлов.</p></div>
+      <div class="card"><b>logging, threading, uuid, pathlib</b><p class="small" style="margin:4px 0 0">Логи с маскировкой секретов, <code>RLock</code> вокруг Chroma, идентификаторы документов, безопасные пути.</p></div>
+    </div>
+
+    <h3>Модели по умолчанию</h3>
+    <div class="grid g2">
+      <div class="card"><b class="mono">gpt-5-mini</b><p class="small" style="margin:4px 0 0"><code>CHAT_MODEL</code> — ответы и резюмирование. Это reasoning-модель: перед ответом «думает», поэтому может отвечать заметно дольше обычной.</p></div>
+      <div class="card"><b class="mono">text-embedding-3-small</b><p class="small" style="margin:4px 0 0"><code>EMBED_MODEL</code> — векторы для чанков и поисковых запросов.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ НАДЁЖНОСТЬ ============ -->
+<section id="safety">
+  <div class="wrap">
+    <h2>Надёжность и безопасность</h2>
+    <p class="sub">Что сделано, чтобы бот не путал пользователей, не падал от сбоев и не светил секреты.</p>
+
+    <div class="grid g2">
+      <div class="card">
+        <h3 style="margin-top:0">Данные</h3>
+        <ul>
+          <li>Только личные чаты: роутер фильтрует всё остальное.</li>
+          <li>Изоляция по <code>user_id</code> в Chroma, SQLite и файловой системе.</li>
+          <li>Защита от path traversal: имя файла очищается, итоговый путь проверяется дважды.</li>
+          <li>Проверка расширения и размера, в том числе до скачивания.</li>
+          <li>Удаление с подтверждением кнопками. Порядок: сначала векторы, потом файл и запись, так что при сбое удаление можно повторить.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">Работа с моделью</h3>
+        <ul>
+          <li>Фрагменты документов помечены как данные: инструкции внутри них выполнять нельзя.</li>
+          <li>История и документы разведены в prompt, чтобы модель не выдавала слова из диалога за содержимое файла.</li>
+          <li>Запрос к OpenAI с таймаутом 60 с и двумя автоповторами.</li>
+          <li>Резюме просит не сохранять пароли, ключи, номера карт.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">Параллельность</h3>
+        <ul>
+          <li>Текстовые сообщения пользователя и <code>/clear_chat</code> обрабатываются под его замком: ответ и резюмирование не сталкиваются.</li>
+          <li>Блокирующие вызовы (Chroma, pypdf, python-docx) вынесены в потоки через <code>asyncio.to_thread</code>, чтобы не замораживать бота.</li>
+          <li>Вокруг Chroma стоит <code>RLock</code>: библиотека не рассчитана на конкурентную запись.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">Ошибки и логи</h3>
+        <ul>
+          <li><code>describe_error()</code> переводит исключения OpenAI, Chroma, SQLite, Telegram в короткие понятные фразы.</li>
+          <li>Глобальный <code>@router.errors()</code> — последняя линия обороны.</li>
+          <li>В логах нет текстов сообщений и документов; токен бота и ключ OpenAI заменяются на <code>***</code>. У <code>Settings</code> секреты скрыты из <code>repr()</code>.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ НАСТРОЙКИ ============ -->
+<section id="config">
+  <div class="wrap">
+    <h2>Настройки</h2>
+    <p class="sub">Читаются из <code>.env</code> при старте. Обязательны только два первых значения.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Переменная</th><th>По умолчанию</th><th>Что меняет</th></tr></thead>
+        <tbody>
+          <tr><td><code>BOT_TOKEN</code></td><td>обязательна</td><td>Токен от @BotFather</td></tr>
+          <tr><td><code>OPENAI_API_KEY</code></td><td>обязательна</td><td>Ключ OpenAI</td></tr>
+          <tr><td><code>CHAT_MODEL</code></td><td><code>gpt-5-mini</code></td><td>Модель для ответов и резюме</td></tr>
+          <tr><td><code>EMBED_MODEL</code></td><td><code>text-embedding-3-small</code></td><td>Модель эмбеддингов</td></tr>
+          <tr><td><code>SHORT_MEMORY_MESSAGES</code></td><td>10</td><td>Окно: сколько реплик уходит в модель</td></tr>
+          <tr><td><code>SHORT_MEMORY_SUMMARY_AFTER</code></td><td>20</td><td>Порог резюмирования (0 — выключено); должен быть больше 6</td></tr>
+          <tr><td><code>CHUNK_SIZE</code> / <code>CHUNK_OVERLAP</code></td><td>500 / 75</td><td>Размер чанка и перекрытие, символы</td></tr>
+          <tr><td><code>RAG_TOP_K</code></td><td>5</td><td>Сколько фрагментов передавать модели</td></tr>
+          <tr><td><code>RAG_MAX_DISTANCE</code></td><td>0.7</td><td>Порог релевантности: меньше — строже</td></tr>
+          <tr><td><code>MAX_DOCUMENT_SIZE_MB</code></td><td>20</td><td>Максимальный размер файла</td></tr>
+          <tr><td><code>MAX_ANSWER_TOKENS</code></td><td>4000</td><td>Лимит токенов ответа (для reasoning-моделей включает «размышления»)</td></tr>
+          <tr><td><code>CHROMA_PATH</code> / <code>UPLOADS_PATH</code></td><td><code>./data/chroma</code> / <code>./data/uploads</code></td><td>Где лежат база и файлы; пути считаются от папки проекта</td></tr>
+          <tr><td><code>LOG_LEVEL</code></td><td><code>INFO</code></td><td>Подробность логов</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ НЮАНСЫ ============ -->
+<section id="notes">
+  <div class="wrap">
+    <h2>Что стоит знать</h2>
+    <p class="sub">Особенности и ограничения, которые видны из кода. Часть из них осознанный компромисс, часть — место для будущих улучшений.</p>
+
+    <div class="note"><span class="tag warn">Память</span><p><b>Кратковременная память не переживает перезапуск.</b>История и резюме лежат только в RAM. После рестарта бот забывает диалог, но помнит все документы.</p></div>
+    <div class="note"><span class="tag warn">Память</span><p><b>Есть «слепая зона» между окном и резюме.</b>В модель уходит окно из 10 реплик, а резюме создаётся только когда их больше 20. Реплики между этими границами лежат в памяти, но модель их не видит: они «выпадают» из окна раньше, чем попадут в резюме. Пока в очереди не больше 10 реплик, проблемы нет; после каждого резюмирования очередь снова сжимается до 6, и цикл повторяется.</p></div>
+    <div class="note"><span class="tag warn">Поиск</span><p><b>Уточняющие вопросы определяются по длине.</b>Всё, что короче 60 символов, считается уточнением и ищется вместе с прошлым вопросом. Короткий вопрос на новую тему получит лишний контекст в поиске, а длинное уточнение — не получит.</p></div>
+    <div class="note"><span class="tag warn">Документы</span><p><b>Нет OCR.</b>PDF-скан без текстового слоя бот отклонит с понятным сообщением.</p></div>
+    <div class="note"><span class="tag warn">Документы</span><p><b>Смена <code>EMBED_MODEL</code> ломает старый индекс.</b>У разных моделей разная размерность векторов. Документы нужно удалить и загрузить заново.</p></div>
+    <div class="note"><span class="tag warn">Приватность</span><p><b>Тексты уходят в OpenAI.</b>И вопросы, и найденные фрагменты, и содержимое документов при индексации отправляются во внешний API. С конфиденциальными данными это стоит учитывать.</p></div>
+    <div class="note"><span class="tag">Масштаб</span><p><b>Бот рассчитан на один процесс.</b>Замки и кратковременная память живут внутри процесса, а long polling не позволяет двум копиям бота читать одни и те же обновления. Для нескольких инстансов историю пришлось бы вынести во внешнее хранилище, например Redis.</p></div>
+    <div class="note"><span class="tag">Хранилища</span><p><b>Chroma и SQLite не связаны транзакцией.</b>Согласованность держится на порядке операций, статусах <code>processing</code> / <code>ready</code> и очистке недоделанного при старте.</p></div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    Страница составлена по исходникам проекта: <code>bot.py</code>, <code>config.py</code> и модулям в <code>services/</code>. Числа и имена функций взяты из кода; если вы поменяете значения в <code>.env</code>, симулятор памяти и воронка поиска останутся на значениях по умолчанию.
+  </div>
+</footer>
+
+<script>
+(function () {
+  // Значения из кода: services/short_memory.py, config.py
+  var CAPACITY = 22;    // max(window, summary_after + 2)
+  var WINDOW = 10;      // SHORT_MEMORY_MESSAGES
+  var AFTER = 20;       // SHORT_MEMORY_SUMMARY_AFTER
+  var KEEP = 6;         // SUMMARY_KEEP_MESSAGES
+
+  var queue = [];       // { role: 'user'|'assistant', n: номер обмена }
+  var exchanges = 0;
+  var summarized = 0;
+  var lastLog = 'Нажмите «Задать вопрос».';
+
+  var cellsEl = document.getElementById('cells');
+  var lenEl = document.getElementById('st-len');
+  var exEl = document.getElementById('st-ex');
+  var sumEl = document.getElementById('sum');
+  var logEl = document.getElementById('log');
+
+  function push(msg) {
+    if (queue.length >= CAPACITY) queue.shift();   // deque(maxlen): FIFO-вытеснение
+    queue.push(msg);
+  }
+
+  function exchange() {
+    exchanges++;
+    push({ role: 'user', n: exchanges });
+    push({ role: 'assistant', n: exchanges });
+    lastLog = 'Обмен №' + exchanges + ': в очереди ' + queue.length + ' реплик, порог резюмирования не превышен.';
+    if (queue.length > AFTER) {
+      var batch = queue.length - KEEP;
+      queue.splice(0, batch);
+      summarized += batch;
+      lastLog = 'Обмен №' + exchanges + ': реплик стало больше ' + AFTER + '. Старые ' + batch +
+        ' свёрнуты в резюме, в очереди остались последние ' + KEEP + '.';
+    }
+  }
+
+  function render() {
+    // Со следующим вопросом в модель уйдут WINDOW-1 последних реплик (окно считается с новым вопросом)
+    var visible = Math.min(WINDOW - 1, queue.length);
+    var firstVisible = queue.length - visible;
+    var html = '';
+    for (var i = 0; i < CAPACITY; i++) {
+      if (i < queue.length) {
+        var m = queue[i];
+        var cls = i >= firstVisible ? 'cell in' : 'cell out';
+        html += '<div class="' + cls + '" title="' + (m.role === 'user' ? 'вопрос' : 'ответ') +
+          ' обмена №' + m.n + '">' + (m.role === 'user' ? 'U' : 'A') + m.n + '</div>';
+      } else {
+        html += '<div class="cell"></div>';
+      }
+    }
+    cellsEl.innerHTML = html;
+    lenEl.textContent = queue.length;
+    exEl.textContent = exchanges;
+    if (summarized > 0) {
+      sumEl.className = 'summary-box has';
+      sumEl.textContent = 'Резюме есть: в него свёрнуто реплик — ' + summarized +
+        '. Оно уходит в модель в системном prompt отдельным блоком.';
+    } else {
+      sumEl.className = 'summary-box';
+      sumEl.textContent = 'Резюме пока нет.';
+    }
+    logEl.textContent = lastLog;
+  }
+
+  document.getElementById('sim-send').addEventListener('click', function () { exchange(); render(); });
+  document.getElementById('sim-send5').addEventListener('click', function () {
+    var before = summarized;
+    for (var i = 0; i < 5; i++) exchange();
+    if (summarized === before) lastLog = 'Добавлено 5 обменов, всего ' + exchanges + '.';
+    render();
+  });
+  document.getElementById('sim-clear').addEventListener('click', function () {
+    queue = []; summarized = 0; exchanges = 0;
+    lastLog = '/clear_chat: история и резюме этого пользователя удалены.';
+    render();
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
