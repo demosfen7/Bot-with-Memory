@@ -1,0 +1,17 @@
+# Секреты
+.env
+
+# Данные пользователей
+data/uploads/*
+!data/uploads/.gitkeep
+data/chroma/*
+!data/chroma/.gitkeep
+data/app.db
+data/app.db-journal
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
